@@ -1,5 +1,10 @@
 name: E2E tests
 
+on:
+  push:
+    branches:
+    - master
+
 jobs:
   test:
     name: Run End-to-End tests
