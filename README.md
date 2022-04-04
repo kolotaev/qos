@@ -1,5 +1,14 @@
 # QoS Example
 
+### Build status
+
+[![Unit Tests](https://github.com/kolotaev/qos/workflows/Unit%20tests/badge.svg?branch=master)](https://github.com/kolotaev/qos/actions)
+
+[![E2E Tests](https://github.com/kolotaev/qos/workflows/E2E%20tests/badge.svg?branch=master)](https://github.com/kolotaev/qos/actions)
+
+
+### Description
+
 This repository is an example a bandwidth limiting for TCP file servers.
 
 There are 2 example File servers that are serving files from the base directory and 1 Administration server that allows to configure bandwidth limits for servers and individual connections using TCP text commands interface.

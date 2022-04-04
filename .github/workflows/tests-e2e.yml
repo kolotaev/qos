@@ -1,0 +1,17 @@
+name: E2E tests
+
+jobs:
+  test:
+    name: Run End-to-End tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout VCS
+        uses: actions/checkout@v2
+      - name: Set up Go 1.16
+        uses: actions/setup-go@v1
+        with:
+          go-version: 1.16
+      - name: Install all Go dependencies
+        run: make deps
+      - name: Test
+        run: make test-e2e
