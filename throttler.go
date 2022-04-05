@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"sync"
 	"time"
@@ -16,22 +17,24 @@ import (
 // Throttler uses 1 second resolution and allows to set bandwidth limits in bytes.
 // Thus minimum bandwidth value is `1 b/s` which is a fair minimum for a practical usage.
 type Throttler struct {
-	enabled           bool
-	defaultLimit      int64
-	connectionsLimits map[string]int64
-	limiter           *rate.Limiter
-	mu                *sync.RWMutex
-	listener          net.Listener
+	enabled       bool
+	totalLimit    int64
+	freeLimitPool int64 // used for optimization
+	db            *Database
+	limiter       *rate.Limiter
+	mu            *sync.RWMutex
+	listener      net.Listener
 }
 
 // NewThrottler Throttler ctor.
-func NewThrottler(defaultLimit int64, enabled bool) *Throttler {
+func NewThrottler(totalLimit int64, enabled bool) *Throttler {
 	return &Throttler{
-		enabled:           enabled,
-		defaultLimit:      defaultLimit,
-		connectionsLimits: make(map[string]int64),
-		limiter:           rate.NewLimiter(rate.Every(time.Duration(1)*time.Second), 1),
-		mu:                new(sync.RWMutex),
+		enabled:       enabled,
+		totalLimit:    totalLimit,
+		freeLimitPool: totalLimit,
+		db:            NewDatabase(),
+		limiter:       rate.NewLimiter(rate.Every(time.Duration(1)*time.Second), 1),
+		mu:            new(sync.RWMutex),
 	}
 }
 
@@ -88,28 +91,13 @@ func (t *Throttler) IsEnabled() bool {
 	return t.enabled
 }
 
-// SetBandwidthLimit set bandwidth limitting value for a server.
-func (t *Throttler) SetBandwidthLimit(limit int64) {
-	t.defaultLimit = limit
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for key := range t.connectionsLimits {
-		t.connectionsLimits[key] = t.defaultLimit
-	}
-}
-
-// SetBandwidthLimitForConnection set bandwidth limitting value for a connection.
-func (t *Throttler) SetBandwidthLimitForConnection(limit int64, connectionKey string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.connectionsLimits[connectionKey] = limit
-}
-
 // Write write data from the input source to an output writer.
 func (t *Throttler) Write(ctx context.Context, dest io.Writer,
 	destKey string, src io.Reader) (servedBytes int64, err error) {
 
 	servedBytes = int64(0)
+
+	t.RegisterConnection(destKey)
 
 	for {
 		var n int64
@@ -131,19 +119,83 @@ func (t *Throttler) Write(ctx context.Context, dest io.Writer,
 	}
 }
 
+// SetBandwidthLimit set bandwidth limitting value for a server.
+func (t *Throttler) SetBandwidthLimit(limit int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// If we increase global limit - just update and increase free pool
+	if limit >= t.totalLimit {
+		t.freeLimitPool += limit - t.totalLimit
+		t.totalLimit = limit
+		return
+	}
+
+	// If we decrease global limit - make sure existing individual limits sum
+	// doesn't exceed new max total limit capacity.
+	individualLimitsSum := t.totalLimit - t.freeLimitPool
+	if individualLimitsSum <= limit {
+		t.freeLimitPool = limit - individualLimitsSum
+		t.totalLimit = limit
+		return
+	}
+	// If so, just decrease existing individual limits by a proportional amount.
+	minAllowed := int64(math.Floor(float64(limit) / float64(t.db.CountConnectionsWithIndividualLimit())))
+	t.db.UpdateIndividualLimits(minAllowed)
+	t.freeLimitPool = 0
+	t.totalLimit = limit
+}
+
+// SetBandwidthLimitForConnection set bandwidth limitting value for a connection.
+func (t *Throttler) SetBandwidthLimitForConnection(limit int64, connectionKey string) {
+	t.RegisterConnection(connectionKey)
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// We can't allow to use more than we have in free allowed bandwidth per pool
+	if limit > t.freeLimitPool {
+		limit = t.freeLimitPool
+	}
+
+	t.freeLimitPool -= limit
+	t.db.SetLimit(limit, connectionKey)
+}
+
 // GetLimitForConnection get bandwidth limitting value for a connection.
 func (t *Throttler) GetBandwidthLimitForConnection(connectionKey string) int64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if _, ok := t.connectionsLimits[connectionKey]; !ok {
-		return t.defaultLimit
+
+	c := t.db.Get(connectionKey)
+	if !c.Active {
+		return 0
 	}
-	return t.connectionsLimits[connectionKey]
+	if c.HasIndividualLimit {
+		return c.Limit
+	}
+
+	countWithoutIndividualLimits := t.db.CountActiveConnections() - t.db.CountConnectionsWithIndividualLimit()
+	return int64(math.Floor(float64(t.freeLimitPool) / float64(countWithoutIndividualLimits)))
 }
 
-// GetLimitForConnection get bandwidth limitting value for a connection.
+// RegisterConnection register a connection.
+func (t *Throttler) RegisterConnection(connectionKey string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.db.Activate(connectionKey)
+}
+
+// UnregisterConnection unregister connection.
 func (t *Throttler) UnregisterConnection(connectionKey string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.connectionsLimits, connectionKey)
+
+	t.db.Deactivate(connectionKey)
+
+	c := t.db.Get(connectionKey)
+	if c.HasIndividualLimit {
+		t.freeLimitPool += c.Limit
+	}
 }
