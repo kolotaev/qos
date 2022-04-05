@@ -15,6 +15,8 @@ run: build
 fmt:
 	@go fmt ./...
 
+test: test-unit test-e2e
+
 test-unit:
 	@go test . -v -run Test[^End2End]
 

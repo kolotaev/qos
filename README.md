@@ -56,4 +56,5 @@ Examples:
 - Clone the repository.
 - `cd /path/to/repo`.
 - `make test-unit` # to run unit tests
-- `make test-e2e` # to run end-to-end tests
+- `make test-unit` # to run unit tests
+- `make test` # to run all tests

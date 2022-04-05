@@ -2,7 +2,10 @@ package qos
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -18,6 +21,7 @@ type Throttler struct {
 	connectionsLimits map[string]int64
 	limiter           *rate.Limiter
 	mu                *sync.RWMutex
+	listener          net.Listener
 }
 
 // NewThrottler Throttler ctor.
@@ -29,6 +33,44 @@ func NewThrottler(defaultLimit int64, enabled bool) *Throttler {
 		limiter:           rate.NewLimiter(rate.Every(time.Duration(1)*time.Second), 1),
 		mu:                new(sync.RWMutex),
 	}
+}
+
+// Listen start listening to incoming connections.
+func (t *Throttler) Listen(network, address string) error {
+	if t.listener != nil {
+		return errors.New("listening was started previously, it can be started only once")
+	}
+	l, err := net.Listen(network, address)
+	if err != nil {
+		return fmt.Errorf("failed to listen with Throttler: %s", err)
+	}
+	t.listener = l
+	return nil
+}
+
+// Accept waits for and returns the next connection to the listener.
+func (t *Throttler) Accept() (net.Conn, error) {
+	if t.listener == nil {
+		return nil, errors.New("please start listening first")
+	}
+	return t.listener.Accept()
+}
+
+// Close closes the listener.
+// Any blocked Accept operations will be unblocked and return errors.
+func (t *Throttler) Close() error {
+	if t.listener == nil {
+		return errors.New("please start listening first")
+	}
+	return t.listener.Close()
+}
+
+// Addr returns the listener's network address.
+func (t *Throttler) Addr() net.Addr {
+	if t.listener == nil {
+		return nil
+	}
+	return t.listener.Addr()
 }
 
 // Enable bandwidth limitting.
@@ -63,7 +105,7 @@ func (t *Throttler) SetBandwidthLimitForConnection(limit int64, connectionKey st
 	t.connectionsLimits[connectionKey] = limit
 }
 
-// Write write data to a connection.
+// Write write data from the input source to an output writer.
 func (t *Throttler) Write(ctx context.Context, dest io.Writer,
 	destKey string, src io.Reader) (servedBytes int64, err error) {
 

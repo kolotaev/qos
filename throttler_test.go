@@ -3,6 +3,7 @@ package qos_test
 import (
 	"bytes"
 	"context"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -66,4 +67,64 @@ func TestThrottler_WriteWithTimeout(t *testing.T) {
 	assert.ErrorContains(t, err, "Wait(n=1) would exceed context deadline")
 	assert.Equal(t, int64(4), n)
 	assert.Equal(t, "Addr", out.String())
+}
+
+func TestThrottler_Listen(t *testing.T) {
+	th := qos.NewThrottler(4, true)
+	err := th.Listen("tcp", "127.0.0.1:0")
+	defer th.Close()
+	assert.NoError(t, err)
+}
+
+func TestThrottler_ListenOnWrongAddress(t *testing.T) {
+	th := qos.NewThrottler(4, true)
+	err := th.Listen("tcp", "127.0.0.1:999999999")
+	assert.EqualError(t, err, "failed to listen with Throttler: listen tcp: address 999999999: invalid port")
+
+	c, err := th.Accept()
+	assert.Nil(t, c)
+	assert.EqualError(t, err, "please start listening first")
+}
+
+func TestThrottler_ListenCanBeCalledOnlyOnce(t *testing.T) {
+	th := qos.NewThrottler(4, true)
+	err := th.Listen("tcp", "127.0.0.1:0")
+	assert.NoError(t, err)
+	defer th.Close()
+
+	err = th.Listen("tcp", "127.0.0.1:0")
+	assert.EqualError(t, err, "listening was started previously, it can be started only once")
+}
+
+func TestThrottler_AcceptBeforeListening(t *testing.T) {
+	th := qos.NewThrottler(4, true)
+	c, err := th.Accept()
+	assert.Nil(t, c)
+	assert.EqualError(t, err, "please start listening first")
+}
+
+func TestThrottler_Addr(t *testing.T) {
+	th := qos.NewThrottler(4, true)
+	err := th.Listen("tcp", "127.0.0.1:0")
+	assert.NoError(t, err)
+	defer th.Close()
+
+	addr := th.Addr()
+	assert.Contains(t, addr.String(), "127.0.0.1:")
+}
+
+func TestThrottler_AddrBeforeListening(t *testing.T) {
+	th := qos.NewThrottler(4, true)
+	addr := th.Addr()
+	assert.Nil(t, addr)
+}
+
+func TestThrottler_NetListenerInterfaceCompilation(t *testing.T) {
+	th := qos.NewThrottler(4, true)
+	th.Listen("tcp", "127.0.0.1:0")
+	defer th.Close()
+	func(l net.Listener) {
+		th.Addr()
+	}(th)
+	assert.NotNil(t, th)
 }

@@ -16,7 +16,6 @@ import (
 type TCPFileServer struct {
 	throttler     *Throttler
 	baseDirectory string
-	listener      net.Listener
 	logger        *log.Logger
 }
 
@@ -70,15 +69,14 @@ func (s *TCPFileServer) Handle(conn net.Conn) {
 // Serve listen for incoming connections and run server.
 func (s *TCPFileServer) Serve(protocol, address string) error {
 	s.logger.Printf("TCP File Server listens on %s %s\n", protocol, address)
-	listener, err := net.Listen(protocol, address)
+	err := s.throttler.Listen(protocol, address)
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
-	s.listener = listener
+	defer s.throttler.Close()
 
 	for {
-		c, err := listener.Accept()
+		c, err := s.throttler.Accept()
 		if err != nil {
 			return err
 		}
@@ -88,11 +86,13 @@ func (s *TCPFileServer) Serve(protocol, address string) error {
 }
 
 // Stop stop listening for incoming connections.
-func (s *TCPFileServer) Stop() {
+func (s *TCPFileServer) Stop() error {
 	s.logger.Println("TCP File Server stops")
-	if s.listener != nil {
-		s.listener.Close()
+	err := s.throttler.Close()
+	if err != nil {
+		return err
 	}
+	return nil
 }
 
 func (s *TCPFileServer) writeFile(fileName string, conn net.Conn, connectionKey string) error {
